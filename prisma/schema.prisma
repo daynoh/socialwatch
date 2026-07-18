@@ -1,0 +1,41 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Entity {
+  id         Int          @id @default(autoincrement())
+  name       String       @unique
+  SearchTerm SearchTerm[] @relation("EntitySearchTerms")
+}
+
+model SearchTerm {
+  id     Int      @id @default(autoincrement())
+  term   String   @unique
+  Entity Entity[] @relation("EntitySearchTerms")
+  Tweet  Tweet[]  @relation("TweetSearchTerms")
+}
+
+model Tweet {
+  id         Int          @id @default(autoincrement())
+  tweetText  String
+  datetime   DateTime?
+  likes      Int
+  replies    Int
+  reposts    Int
+  userId     Int
+  sentiment  Float?
+  User       User         @relation(fields: [userId], references: [id])
+  SearchTerm SearchTerm[] @relation("TweetSearchTerms")
+}
+
+model User {
+  id       Int     @id @default(autoincrement())
+  username String
+  handle   String  @unique
+  Tweet    Tweet[]
+}
