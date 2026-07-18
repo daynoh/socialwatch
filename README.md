@@ -8,6 +8,7 @@ SocialWatch is a live public-conversation dashboard for comparing topics, measur
 - Search real public Bluesky posts without private API credentials
 - Switch between 24-hour, 7-day, and 30-day analysis periods
 - Review sentiment trends and topic-level engagement
+- Explore frequent conversation terms in a responsive word cloud
 - Open every result on its original Bluesky post
 - Save the watchlist in the browser
 - Export recent results as CSV
@@ -22,6 +23,7 @@ SocialWatch is a live public-conversation dashboard for comparing topics, measur
 - React and TypeScript
 - Tailwind CSS
 - Recharts
+- d3-cloud
 - Bluesky public AppView API
 - Vercel
 

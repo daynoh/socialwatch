@@ -27,6 +27,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import WordCloud from "@/components/wordCloud";
 
 type Sentiment = "positive" | "negative" | "neutral";
 
@@ -73,6 +74,91 @@ const PERIODS = [
   { label: "7d", days: 7 },
   { label: "30d", days: 30 },
 ];
+
+const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+class TopicRequestError extends Error {
+  retryable: boolean;
+
+  constructor(message: string, retryable = false) {
+    super(message);
+    this.name = "TopicRequestError";
+    this.retryable = retryable;
+  }
+}
+
+function isTopicStats(value: unknown): value is TopicStats {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<TopicStats>;
+  return typeof candidate.query === "string"
+    && typeof candidate.totalPosts === "number"
+    && typeof candidate.fetchedAt === "string"
+    && Array.isArray(candidate.dailyAverageSentiments)
+    && Array.isArray(candidate.recentPosts);
+}
+
+function responseError(payload: unknown, fallback: string) {
+  if (payload && typeof payload === "object" && "error" in payload) {
+    const message = (payload as { error?: unknown }).error;
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return fallback;
+}
+
+async function waitBeforeRetry(signal: AbortSignal) {
+  await new Promise((resolve) => window.setTimeout(resolve, 650));
+  if (signal.aborted) throw new DOMException("The request was cancelled.", "AbortError");
+}
+
+async function fetchTopicStats(params: URLSearchParams, signal: AbortSignal) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(`/api/entityStats?${params}`, {
+        cache: "no-store",
+        signal,
+      });
+      const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+      const body = await response.text();
+
+      if (!contentType.includes("application/json")) {
+        throw new TopicRequestError("The data service returned a temporary page. Use Refresh to try again.", true);
+      }
+
+      let payload: unknown;
+      try {
+        payload = JSON.parse(body);
+      } catch {
+        throw new TopicRequestError("The data service returned an invalid response. Use Refresh to try again.", true);
+      }
+
+      if (!response.ok) {
+        throw new TopicRequestError(
+          responseError(payload, "Live social data is temporarily unavailable."),
+          RETRYABLE_STATUSES.has(response.status),
+        );
+      }
+
+      if (!isTopicStats(payload)) {
+        throw new TopicRequestError("The data service returned incomplete results. Use Refresh to try again.", true);
+      }
+
+      return payload;
+    } catch (requestError) {
+      if (requestError instanceof DOMException && requestError.name === "AbortError") throw requestError;
+
+      const normalizedError = requestError instanceof TopicRequestError
+        ? requestError
+        : new TopicRequestError("The live data request was interrupted. Use Refresh to try again.", true);
+      if (attempt === 0 && normalizedError.retryable) {
+        await waitBeforeRetry(signal);
+        continue;
+      }
+      throw normalizedError;
+    }
+  }
+
+  throw new TopicRequestError("Live social data is temporarily unavailable.");
+}
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("en-KE", { notation: "compact", maximumFractionDigits: 1 }).format(value);
@@ -138,34 +224,32 @@ export default function SocialWatchDashboard() {
             startDate: startDate.toISOString(),
             endDate: endDate.toISOString(),
           });
-          const response = await fetch(`/api/entityStats?${params}`, {
-            cache: "no-store",
-            signal: controller.signal,
-          });
-          const data = (await response.json()) as TopicStats | { error?: string };
-
-          if (!response.ok || !("query" in data)) {
-            throw new Error("error" in data ? data.error : `Unable to load ${topic}`);
-          }
-
-          return data;
+          return fetchTopicStats(params, controller.signal);
         }),
       );
 
       if (controller.signal.aborted) return;
 
       const nextStats: Record<string, TopicStats> = {};
-      const failures: string[] = [];
+      const failures: Array<{ topic: string; message: string }> = [];
       results.forEach((result, index) => {
         if (result.status === "fulfilled") {
           nextStats[result.value.query] = result.value;
         } else {
-          failures.push(`${topics[index]}: ${result.reason instanceof Error ? result.reason.message : "Unavailable"}`);
+          failures.push({
+            topic: topics[index],
+            message: result.reason instanceof Error ? result.reason.message : "Unavailable",
+          });
         }
       });
 
       setStats(nextStats);
-      setError(failures.join("  "));
+      const uniqueFailureMessages = Array.from(new Set(failures.map((failure) => failure.message)));
+      setError(
+        failures.length > 1 && uniqueFailureMessages.length === 1
+          ? `All tracked topics: ${uniqueFailureMessages[0]}`
+          : failures.map((failure) => `${failure.topic}: ${failure.message}`).join("  "),
+      );
       setLoading(false);
     }
 
@@ -481,6 +565,19 @@ export default function SocialWatchDashboard() {
                 );
               })}
             </div>
+          </div>
+        </section>
+
+        <section className="mt-6 rounded-md border border-slate-200 bg-white p-4 sm:p-6">
+          <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-start">
+            <div>
+              <h2 className="text-base font-bold">Conversation word cloud</h2>
+              <p className="mt-1 text-xs text-slate-500">Frequent terms across the latest sampled posts</p>
+            </div>
+            <p className="text-xs text-slate-400">Watchlist names and common words excluded</p>
+          </div>
+          <div className="mt-4 border-t border-slate-100 pt-2">
+            <WordCloud texts={recentPosts.map((post) => post.text)} excludedTerms={topics} />
           </div>
         </section>
 
